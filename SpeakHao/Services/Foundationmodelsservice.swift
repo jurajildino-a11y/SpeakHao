@@ -5,70 +5,71 @@
 //  Created by Muh. Naufal Fahri Salim on 5/4/26.
 //
 
-import Foundation
-import Combine          // ← WAJIB untuk @Published + ObservableObject
-import FoundationModels // ← iOS 26+ / Xcode 26 beta
+//
+//  Foundationmodelsservice.swift
+//  SpeakHao
+//
+//  Created by Muh. Naufal Fahri Salim on 5/4/26.
+//
 
-// MARK: - Message Model
+import Foundation          
+import Combine
+import FoundationModels
+
+// MARK: - Conversation Message
 
 struct ConversationMessage: Identifiable, Equatable {
     let id = UUID()
     let role: MessageRole
-    let chineseText: String     // 汉字
-    let pinyinText: String      // Romanization
-    let englishText: String     // Translation
+    let chineseText: String
+    let pinyinText: String
+    let englishText: String
     let timestamp: Date
+    let isClosing: Bool
 
     enum MessageRole {
         case npc, user
     }
 
-    init(role: MessageRole, chinese: String, pinyin: String, english: String) {
+    init(role: MessageRole, chinese: String, pinyin: String, english: String, isClosing: Bool = false) {
         self.role = role
         self.chineseText = chinese
         self.pinyinText = pinyin
         self.englishText = english
         self.timestamp = Date()
+        self.isClosing = isClosing
     }
-}
-
-// MARK: - NPC Scenario
-
-struct NPCScenario {
-    let systemPrompt: String
-    let initialMessage: ConversationMessage
-    let expectedKeywords: [String]
-
-    static let morningGreeting = NPCScenario(
-        systemPrompt: """
-        You are Lǐ Míng (李明), a friendly Chinese NPC in a language learning app.
-        Your role: Have a short, natural Mandarin conversation with a beginner learner.
-
-        Strict rules:
-        - Respond ONLY in Simplified Chinese characters (汉字). No pinyin, no English.
-        - Maximum 1–2 short sentences per reply.
-        - Always end with a simple follow-up question to keep the conversation going.
-        - Topic: Morning greetings, how are you, weather, daily plans.
-        - Example reply: 很好，谢谢！今天天气怎么样？
-        """,
-        initialMessage: ConversationMessage(
-            role: .npc,
-            chinese: "你好！早上好。你今天怎么样？",
-            pinyin: "Nǐ hǎo! Zǎoshang hǎo. Nǐ jīntiān zěnme yàng?",
-            english: "Hello! Good morning. How are you today?"
-        ),
-        expectedKeywords: ["好", "hao", "fine", "great", "不错", "很好", "还好", "累", "tired"]
-    )
 }
 
 // MARK: - Foundation Models Generable Output
 
-/// Typed output schema so LanguageModelSession returns structured JSON
 @available(iOS 26.0, *)
 @Generable
 struct NPCReply {
-    @Guide(description: "NPC reply in Simplified Chinese characters only. No pinyin or English. 1-2 sentences maximum.")
+    // FIX: Hapus properti chineseText duplikat. Hanya boleh ada satu.
+    @Guide(description: """
+        NPC reply in Simplified Chinese characters only. No pinyin, no English.
+        Maximum 2-3 short sentences. Beginner-friendly vocabulary.
+        """)
     var chineseText: String
+
+    @Guide(description: """
+        Pinyin romanization of chineseText with tone marks.
+        Example: "Ni hao! Zuijin gongzuo zenme yang?"
+        """)
+    var pinyinText: String
+
+    @Guide(description: """
+        Natural English translation of chineseText.
+        Example: "Hello! How has work been lately?"
+        """)
+    var englishText: String
+
+    @Guide(description: """
+        Set to true ONLY when the conversation goal is fully achieved and \
+        you have said a proper goodbye. In most turns this must be false.
+        """)
+    var isConversationComplete: Bool
 }
 
 // MARK: - Foundation Models Service
@@ -78,14 +79,10 @@ class FoundationModelsService: ObservableObject {
 
     @Published var isGenerating = false
     @Published var errorMessage: String?
+    @Published var isConversationComplete = false
 
-    private let scenario: NPCScenario
+    private var scenario: NPCScenario
 
-    // Keep history short — on-device model has limited context window
-    private var conversationHistory: [(role: String, content: String)] = []
-
-    // Reuse session across turns for context continuity
-    // Stored as AnyObject to avoid @available on stored property
     private var _sessionStorage: AnyObject?
 
     @available(iOS 26.0, *)
@@ -94,177 +91,220 @@ class FoundationModelsService: ObservableObject {
         set { _sessionStorage = newValue }
     }
 
-    init(scenario: NPCScenario = .morningGreeting) {
+    // MARK: - Init
+
+    init(scenario: NPCScenario) {
         self.scenario = scenario
+    }
+
+    // MARK: - Opening Message
+
+    var openingMessage: ConversationMessage {
+        scenario.initialMessage
     }
 
     // MARK: - Generate NPC Response
 
-    func generateResponse(to userChinese: String) async -> ConversationMessage {
+    func generateResponse(
+        to userChinese: String,
+        languageAnalysis: LanguageAnalysisResult? = nil
+    ) async -> ConversationMessage {
+        guard !isConversationComplete else {
+            return ConversationMessage(
+                role: .npc,
+                chinese: "再见！",
+                pinyin: "Zàijiàn!",
+                english: "Goodbye!"
+            )
+        }
+
         isGenerating = true
         defer { isGenerating = false }
 
-        conversationHistory.append((role: "user", content: userChinese))
+        print("🟡 [FM] generateResponse called with: \"\(userChinese)\"")
 
-        // Try Foundation Models first (iOS 26 + Apple Intelligence)
         if #available(iOS 26.0, *) {
+            print("🟡 [FM] iOS 26 available — attempting Foundation Models")
             do {
-                let chinese = try await callFoundationModels(userText: userChinese)
-                conversationHistory.append((role: "assistant", content: chinese))
-                return enrichWithPinyinAndTranslation(chineseText: chinese)
+                let reply = try await callFoundationModels(
+                    userText: userChinese,
+                    languageAnalysis: languageAnalysis
+                )
+
+                print("✅ [FM] SUCCESS — response: \"\(reply.chineseText)\"")
+                print("✅ [FM] isConversationComplete: \(reply.isConversationComplete)")
+
+                if reply.isConversationComplete {
+                    isConversationComplete = true
+                }
+
+                return ConversationMessage(
+                    role: .npc,
+                    chinese: reply.chineseText,
+                    pinyin: reply.pinyinText,
+                    english: reply.englishText,
+                    isClosing: reply.isConversationComplete
+                )
             } catch {
-                // Log but don't crash — fall through to rule-based
+                print("❌ [FM] ERROR: \(error)")
+                print("❌ [FM] localizedDescription: \(error.localizedDescription)")
                 errorMessage = "Foundation Models: \(error.localizedDescription)"
             }
+        } else {
+            print("❌ [FM] iOS 26 NOT available — device/simulator does not support Foundation Models")
         }
 
-        // Rule-based fallback (always works, great for development)
-        let fallback = getFallbackResponse(to: userChinese)
-        conversationHistory.append((role: "assistant", content: fallback.chineseText))
-        return fallback
+        // Fallback jika Foundation Models tidak tersedia
+        print("⚠️ [FM] Using FALLBACK response")
+        return ConversationMessage(
+            role: .npc,
+            chinese: "好的，请继续。",
+            pinyin: "Hǎo de, qǐng jìxù.",
+            english: "[FALLBACK] Foundation Models tidak aktif",
+            isClosing: false
+        )
     }
 
-    // MARK: - Foundation Models (iOS 26+)
+    // MARK: - Foundation Models Call
 
     @available(iOS 26.0, *)
-    private func callFoundationModels(userText: String) async throws -> String {
+    private func callFoundationModels(
+        userText: String,
+        languageAnalysis: LanguageAnalysisResult? = nil
+    ) async throws -> NPCReply {
         let model = SystemLanguageModel.default
 
-        // Check Apple Intelligence availability
-        // Using 'default' case to handle all unavailable states without
-        // referencing UnavailabilityReason (not a member in this API version)
+        print("🔍 [FM] Model availability: \(model.availability)")
+
         switch model.availability {
         case .available:
-            break // proceed
-        default:
+            print("✅ [FM] Model is available")
+        case .unavailable(let reason):
+            print("❌ [FM] Model NOT available — reason: \(reason)")
+            switch reason {
+            case .modelNotReady:
+                throw FoundationModelsError.modelNotReady
+            case .appleIntelligenceNotEnabled:
+                throw FoundationModelsError.appleIntelligenceNotEnabled
+            case .deviceNotEligible:
+                throw FoundationModelsError.deviceNotEligible
+            default:
+                throw FoundationModelsError.unavailable
+            }
+        @unknown default:
             throw FoundationModelsError.unavailable
         }
 
-        // Create or reuse session with NPC system prompt
-        if _session == nil {
-            _session = LanguageModelSession(instructions: scenario.systemPrompt)
-        }
+        // Create new session with STAGE CONTEXT — reset each stage for fresh context
+        let currentStage = scenario.currentStage
+        let stageNumber = scenario.currentStageIndex
+        let fullPrompt = scenario.baseSystemPrompt
+            + "\n\n--- CURRENT STAGE INFO ---"
+            + "\nStage: \(stageNumber)"
+            + "\nStage Instructions:\n"
+            + currentStage.stagePrompt
+            + "\n--- END STAGE INFO ---\n"
+
+        // Always create new session per stage to ensure context freshness
+        _session = LanguageModelSession(instructions: fullPrompt)
+        print("🔍 [FM] Created new session for STAGE \(stageNumber)")
+
         guard let session = _session else {
+            print("❌ [FM] Session is nil after creation — throwing sessionFailed")
             throw FoundationModelsError.sessionFailed
         }
 
-        // Use @Generable typed output for reliable structured response
+        let enhancedText = buildEnhancedInput(userText: userText, analysis: languageAnalysis, stageNumber: stageNumber)
+        print("🔍 [FM] Sending to model: \"\(enhancedText)\"")
+
         let response = try await session.respond(
-            to: userText,
+            to: enhancedText,
             generating: NPCReply.self
         )
 
-        let chinese = response.content.chineseText
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        print("🔍 [FM] Raw response — chinese: \"\(response.content.chineseText)\" | complete: \(response.content.isConversationComplete)")
 
+        let chinese = response.content.chineseText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !chinese.isEmpty else {
+            print("❌ [FM] chineseText is empty — throwing emptyResponse")
             throw FoundationModelsError.emptyResponse
         }
 
-        return chinese
-    }
-
-    // MARK: - Pinyin + Translation Enrichment
-
-    private func enrichWithPinyinAndTranslation(chineseText: String) -> ConversationMessage {
-        // Lookup table for known responses — expand as needed
-        let map: [String: (String, String)] = [
-            "你好！早上好。你今天怎么样？":
-                ("Nǐ hǎo! Zǎoshang hǎo. Nǐ jīntiān zěnme yàng?",
-                 "Hello! Good morning. How are you today?"),
-            "很好，谢谢！你呢？":
-                ("Hěn hǎo, xièxiè! Nǐ ne?",
-                 "Very good, thank you! And you?"),
-            "我也很好！今天天气真好。":
-                ("Wǒ yě hěn hǎo! Jīntiān tiānqì zhēn hǎo.",
-                 "I'm doing well too! The weather is really nice today."),
-            "好的！今天有什么计划吗？":
-                ("Hǎo de! Jīntiān yǒu shénme jìhuà ma?",
-                 "Great! Any plans for today?"),
-            "哦，为什么？发生什么了？":
-                ("Ō, wèishénme? Fāshēng shénme le?",
-                 "Oh, why? What happened?"),
-            "是吗？今天天气真好。":
-                ("Shì ma? Jīntiān tiānqì zhēn hǎo.",
-                 "Is that so? The weather is really nice today."),
-            "我也很好！今天有什么计划吗？":
-                ("Wǒ yě hěn hǎo! Jīntiān yǒu shénme jìhuà ma?",
-                 "I'm doing well too! Any plans for today?"),
-            "好的！那我们明天再见。再见！":
-                ("Hǎo de! Nà wǒmen míngtiān zàijiàn. Zàijiàn!",
-                 "Great! See you tomorrow then. Goodbye!"),
-            "好的。再见！":
-                ("Hǎo de. Zàijiàn!", "Alright. Goodbye!"),
-        ]
-
-        if let (pinyin, english) = map[chineseText] {
-            return ConversationMessage(role: .npc, chinese: chineseText,
-                                       pinyin: pinyin, english: english)
-        }
-
-        // Unknown response from model — show raw Chinese, mark pinyin/english as pending
-        return ConversationMessage(
-            role: .npc,
-            chinese: chineseText,
-            pinyin: "—",
-            english: "(AI response — translation pending)"
+        return NPCReply(
+            chineseText: chinese,
+            pinyinText: response.content.pinyinText.trimmingCharacters(in: .whitespacesAndNewlines),
+            englishText: response.content.englishText.trimmingCharacters(in: .whitespacesAndNewlines),
+            isConversationComplete: response.content.isConversationComplete
         )
     }
 
-    // MARK: - Rule-Based Fallback
+    // MARK: - Build Enhanced Input
 
-    private func getFallbackResponse(to userText: String) -> ConversationMessage {
-        let lower = userText.lowercased()
-        let isPositive = lower.contains("好") || lower.contains("hao") ||
-                         lower.contains("fine") || lower.contains("great") || lower.contains("不错")
-        let isNegative = lower.contains("不好") || lower.contains("累") || lower.contains("tired")
+    private func buildEnhancedInput(
+        userText: String,
+        analysis: LanguageAnalysisResult?,
+        stageNumber: Int = 0
+    ) -> String {
+        var enhancedText = userText
 
-        let turnCount = conversationHistory.filter { $0.role == "user" }.count
+        if let analysis = analysis {
+            let tokenStr = analysis.tokens.joined(separator: ", ")
+            let sentimentStr = String(describing: analysis.sentiment)
+            let timelineKeywords = NaturalLanguageService().extractTimelineKeywords(from: userText)
 
-        switch turnCount {
-        case 1:
-            if isPositive {
-                return enrichWithPinyinAndTranslation(chineseText: "很好，谢谢！你呢？")
-            } else if isNegative {
-                return enrichWithPinyinAndTranslation(chineseText: "哦，为什么？发生什么了？")
-            } else {
-                return enrichWithPinyinAndTranslation(chineseText: "是吗？今天天气真好。")
-            }
-        case 2:
-            return enrichWithPinyinAndTranslation(chineseText: "我也很好！今天有什么计划吗？")
-        case 3:
-            return enrichWithPinyinAndTranslation(chineseText: "好的！那我们明天再见。再见！")
-        default:
-            return enrichWithPinyinAndTranslation(chineseText: "好的。再见！")
+            let contextInfo = "[STAGE: \(stageNumber) | SENTIMENT: \(sentimentStr) | TOKENS: \(tokenStr)"
+                + (timelineKeywords.isEmpty ? "" : " | TIMELINE_KEYWORDS: \(timelineKeywords.joined(separator: ", "))")
+                + "] "
+
+            enhancedText = contextInfo + userText
         }
+
+        return enhancedText
     }
 
+    // MARK: - Reset
+
     func reset() {
-        conversationHistory = []
-        if #available(iOS 26.0, *) {
-            _session = nil
-        }
+        isConversationComplete = false
+        errorMessage = nil
+        if #available(iOS 26.0, *) { _session = nil }
+    }
+
+    func switchScenario(to newScenario: NPCScenario) {
+        scenario = newScenario
+        reset()
     }
 }
 
 // MARK: - Custom Errors
 
+// FIX: Conform ke LocalizedError (bukan hanya Error) dan import Foundation
+// agar errorDescription dan localizedDescription berfungsi dengan benar.
 enum FoundationModelsError: LocalizedError {
-    case unavailable   // ← Dihapus associated value UnavailabilityReason (tidak ada di API ini)
+    case unavailable
     case sessionFailed
     case emptyResponse
     case unknown
+    case modelNotReady
+    case appleIntelligenceNotEnabled
+    case deviceNotEligible
 
     var errorDescription: String? {
         switch self {
         case .unavailable:
-            return "Apple Intelligence is not available on this device."
+            return "Foundation Models are unavailable on this device."
         case .sessionFailed:
             return "Could not create language model session."
         case .emptyResponse:
             return "Model returned an empty response."
         case .unknown:
             return "Unknown Foundation Models error."
+        case .modelNotReady:
+            return "The model is not ready yet. Please try again later."
+        case .appleIntelligenceNotEnabled:
+            return "Apple Intelligence is not enabled on this device."
+        case .deviceNotEligible:
+            return "This device is not eligible for Foundation Models."
         }
     }
 }

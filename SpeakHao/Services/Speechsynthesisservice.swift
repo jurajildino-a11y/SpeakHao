@@ -33,20 +33,36 @@ class SpeechSynthesisService: NSObject, ObservableObject, AVSpeechSynthesizerDel
         try? session.setActive(true)
 
         let utterance = AVSpeechUtterance(string: text)
-
-        if let voice = AVSpeechSynthesisVoice(language: language) {
-            utterance.voice = voice
-        } else {
-            let voices = AVSpeechSynthesisVoice.speechVoices()
-            utterance.voice = voices.first(where: { $0.language.hasPrefix(language.prefix(2)) })
-        }
-
+        utterance.voice = bestVoice(for: language)
         utterance.rate = (language == "zh-CN") ? 0.45 : 0.52
         utterance.pitchMultiplier = 1.05
         utterance.volume = 1.0
 
         isSpeaking = true
         synthesizer.speak(utterance)
+    }
+
+    // MARK: - Voice Selection
+
+    private func bestVoice(for language: String) -> AVSpeechSynthesisVoice? {
+        let prefix = String(language.prefix(2))
+        let all = AVSpeechSynthesisVoice.speechVoices()
+
+        // Priority: premium → enhanced → default
+        if let premium = all.first(where: {
+            $0.language.hasPrefix(prefix) && $0.quality == .premium
+        }) {
+            return premium
+        }
+
+        if let enhanced = all.first(where: {
+            $0.language.hasPrefix(prefix) && $0.quality == .enhanced
+        }) {
+            return enhanced
+        }
+
+        // Fallback — sistem pilih sendiri
+        return AVSpeechSynthesisVoice(language: language)
     }
 
     func stopSpeaking() {

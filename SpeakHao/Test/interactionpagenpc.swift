@@ -1,27 +1,23 @@
 // InteractionPageNpc.swift
 // SpeakHao
-// Interactive NPC conversation screen — fully wired to:
-//   • SpeechRecognitionService (Speech framework STT)
-//   • SpeechSynthesisService (AVSpeechSynthesizer TTS)
-//   • NaturalLanguageService (NL framework analysis)
-//   • FoundationModelsService (on-device LLM / fallback)
 //
-// ⚠️ JIKA ADA ERROR "Cannot find type in scope":
-//    Pilih semua file Services/ dan ViewModels/ di Xcode →
-//    File Inspector (panel kanan) → pastikan target "SpeakHao" dicentang.
-
+//  Created by Muh. Naufal Fahri Salim on 5/4/26.
+//
 import SwiftUI
-
+ 
 struct InteractionPageNpc: View {
-    
-    @StateObject private var vm = InteractionViewModel(scenario: .morningGreeting)
+ 
+    // Skenario pertama dari registry — saat ini: ClientMeetingMrZhang
+    @StateObject private var vm = InteractionViewModel(
+        scenario: ScenarioRegistry.all[0]
+    )
     @State private var scrollProxy: ScrollViewProxy? = nil
     @State private var isHoldingMic = false
-    
+ 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            
+ 
             VStack(spacing: 0) {
                 topBar
                 conversationArea
@@ -29,7 +25,6 @@ struct InteractionPageNpc: View {
                 micPanel
             }
         }
-        // Forward live STT into viewModel
         .onReceive(vm.transcribedTextPublisher) { text in
             vm.updateLiveTranscription(text)
         }
@@ -42,9 +37,9 @@ struct InteractionPageNpc: View {
             Text(vm.errorMessage ?? "")
         }
     }
-    
+ 
     // MARK: - Top Bar
-    
+ 
     private var topBar: some View {
         HStack {
             glassButton(icon: "chevron.left") {}
@@ -58,9 +53,9 @@ struct InteractionPageNpc: View {
         .padding(.top, 20)
         .padding(.bottom, 12)
     }
-    
+ 
     // MARK: - Conversation Scroll Area
-    
+ 
     private var conversationArea: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -69,7 +64,6 @@ struct InteractionPageNpc: View {
                         messageBubble(message)
                             .id(message.id)
                     }
-                    
                     if vm.isGenerating {
                         typingIndicator
                     }
@@ -88,33 +82,29 @@ struct InteractionPageNpc: View {
             }
         }
     }
-    
+ 
     // MARK: - Message Bubble
-    
+ 
     @ViewBuilder
     private func messageBubble(_ message: ConversationMessage) -> some View {
         let isNPC = message.role == .npc
-        
+ 
         HStack {
             if !isNPC { Spacer(minLength: 48) }
-            
+ 
             VStack(alignment: isNPC ? .leading : .trailing, spacing: 5) {
-                // Pinyin / metadata line
                 Text(message.pinyinText)
                     .font(.system(size: 13))
                     .foregroundColor(Color(white: 0.45))
-                
-                // Chinese characters (main)
+ 
                 Text(message.chineseText)
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(.black)
-                
-                // English translation / status
+ 
                 Text(message.englishText)
                     .font(.system(size: 14).italic())
                     .foregroundColor(Color(red: 0, green: 0.53, blue: 1))
-                
-                // Replay NPC audio button
+ 
                 if isNPC {
                     Button {
                         vm.speakMessage(message)
@@ -134,13 +124,13 @@ struct InteractionPageNpc: View {
             .padding(16)
             .background(Color.white)
             .cornerRadius(20)
-            
+ 
             if isNPC { Spacer(minLength: 48) }
         }
     }
-    
+ 
     // MARK: - Typing Indicator
-    
+ 
     private var typingIndicator: some View {
         HStack {
             HStack(spacing: 5) {
@@ -162,19 +152,17 @@ struct InteractionPageNpc: View {
             .background(Color.white)
             .cornerRadius(20)
             .id("typing")
-            
+ 
             Spacer(minLength: 48)
         }
-        .padding(.horizontal, 0)
     }
-    
-    // MARK: - Pending Input (live STT + confirm/delete)
-    
+ 
+    // MARK: - Pending Input
+ 
     @ViewBuilder
     private var pendingInputArea: some View {
         if !vm.pendingUserText.isEmpty {
             VStack(spacing: 10) {
-                // Live transcription preview
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
@@ -191,7 +179,6 @@ struct InteractionPageNpc: View {
                                     .foregroundColor(Color(white: 0.5))
                             }
                         }
-                        
                         Text(vm.pendingUserText)
                             .font(.system(size: 18, weight: .medium))
                             .foregroundColor(.white)
@@ -199,8 +186,7 @@ struct InteractionPageNpc: View {
                     }
                     Spacer()
                 }
-                
-                // Action buttons
+ 
                 HStack(spacing: 12) {
                     Button(action: vm.deleteLastUserInput) {
                         Image(systemName: "trash")
@@ -210,7 +196,7 @@ struct InteractionPageNpc: View {
                             .background(Color.white.opacity(0.08))
                             .cornerRadius(12)
                     }
-                    
+ 
                     Button(action: vm.sendUserResponse) {
                         HStack(spacing: 8) {
                             Image(systemName: "paperplane.fill")
@@ -231,13 +217,12 @@ struct InteractionPageNpc: View {
             .background(Color(white: 0.08))
         }
     }
-    
-    // MARK: - Mic Panel (hold to speak)
-    
+ 
+    // MARK: - Mic Panel
+ 
     private var micPanel: some View {
         VStack(spacing: 12) {
             ZStack {
-                // Pulse ring when recording
                 if vm.isRecording {
                     Circle()
                         .stroke(Color(red: 0, green: 0.57, blue: 1).opacity(0.3), lineWidth: 3)
@@ -246,7 +231,7 @@ struct InteractionPageNpc: View {
                         .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true),
                                    value: isHoldingMic)
                 }
-                
+ 
                 Circle()
                     .fill(vm.isRecording
                           ? Color.red
@@ -255,7 +240,7 @@ struct InteractionPageNpc: View {
                     .shadow(color: .black.opacity(0.3), radius: 15, x: 0, y: 8)
                     .scaleEffect(isHoldingMic ? 0.92 : 1.0)
                     .animation(.easeInOut(duration: 0.1), value: isHoldingMic)
-                
+ 
                 Image(systemName: vm.isRecording ? "stop.fill" : "mic.fill")
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundColor(.white)
@@ -273,7 +258,7 @@ struct InteractionPageNpc: View {
                         vm.stopRecording()
                     }
             )
-            
+ 
             Text(vm.isRecording
                  ? "Lepas untuk berhenti"
                  : vm.isNPCSpeaking
@@ -281,8 +266,8 @@ struct InteractionPageNpc: View {
                    : "Tekan dan tahan untuk jawab")
                 .font(.system(size: 14))
                 .foregroundColor(Color(white: 0.6))
-            
-            // Debug: NL analysis result (remove in production)
+ 
+            // Debug: NL analysis (hapus di production)
             if let analysis = vm.lastAnalysis {
                 Text("Lang: \(analysis.detectedLanguage ?? "?") · \(analysis.isRelevantToContext ? "On topic ✓" : "Off topic ⚠")")
                     .font(.system(size: 11))
@@ -297,9 +282,9 @@ struct InteractionPageNpc: View {
         .padding(.bottom, 20)
         .padding(.top, 8)
     }
-    
+ 
     // MARK: - Helpers
-    
+ 
     private func glassButton(icon: String, label: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: label != nil ? 6 : 0) {
@@ -318,7 +303,7 @@ struct InteractionPageNpc: View {
         }
     }
 }
-
+ 
 #Preview {
     InteractionPageNpc()
 }

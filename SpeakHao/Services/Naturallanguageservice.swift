@@ -12,6 +12,14 @@ struct LanguageAnalysisResult {
     let isChinese: Bool
     let tokens: [String]               // Tokenized words/characters
     let isRelevantToContext: Bool      // Whether response touches the expected topic
+    let sentiment: SentimentType        // Emotional tone
+}
+
+enum SentimentType {
+    case positive    // Happy, satisfied, cooperative
+    case neutral     // Normal response
+    case negative    // Frustrated, angry, rude
+    case confused    // Off-topic or unclear
 }
 
 class NaturalLanguageService {
@@ -39,10 +47,86 @@ class NaturalLanguageService {
 
         var tokens: [String] = []
         tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
-            tokens.append(String(text[range]))
+            let token = String(text[range]).trimmingCharacters(in: .whitespaces)
+            if !token.isEmpty {
+                tokens.append(token)
+            }
             return true
         }
         return tokens
+    }
+
+    // MARK: - Number Extraction
+    
+    /// Extract numbers mentioned in the text (for timeline/duration understanding)
+    func extractNumbers(from text: String) -> [String] {
+        let pattern = "[0-9]+|零|一|二|三|四|五|六|七|八|九|十|百|千|万|兆|两"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return []
+        }
+        
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, options: [], range: range)
+        
+        return matches.compactMap { match in
+            if let range = Range(match.range, in: text) {
+                return String(text[range])
+            }
+            return nil
+        }
+    }
+
+    // MARK: - Sentiment Analysis
+    
+    /// Detect emotional tone/sentiment of user input
+    func detectSentiment(in text: String) -> SentimentType {
+        let lower = text.lowercased()
+        
+        // Negative indicators (rude, frustrated, angry)
+        let negativeKeywords = [
+            "草你妈", "cao ni ma", "傻", "stupid", "蠢", "dumb", "烦", "烦死了",
+            "滚", "fuck", "shit", "damn", "去死", "die", "垃圾", "garbage",
+            "你妈", "bastard", "操", "烦你", "讨厌", "hate"
+        ]
+        
+        // Positive indicators
+        let positiveKeywords = [
+            "好", "好的", "很好", "太好了", "谢谢", "谢谢你", "可以", "行", "可以啊",
+            "great", "good", "thank", "thanks", "perfect", "ok", "sure", "happy",
+            "很开心", "开心", "高兴", "满意", "非常满意"
+        ]
+        
+        let hasNegative = negativeKeywords.contains { lower.contains($0) }
+        let hasPositive = positiveKeywords.contains { lower.contains($0) }
+        
+        if hasNegative {
+            return .negative
+        } else if hasPositive {
+            return .positive
+        } else if lower.isEmpty || lower.count < 2 {
+            return .confused
+        } else {
+            return .neutral
+        }
+    }
+    func extractTimelineKeywords(from text: String) -> [String] {
+        let timelineKeywords = [
+            "天", "天", "日", "周", "月", "年", "小时", "分钟", "秒",
+            "day", "days", "week", "weeks", "month", "months", "year", "years",
+            "hour", "hours", "minute", "minutes", "second", "seconds",
+            "hari", "minggu", "bulan", "tahun", "jam"
+        ]
+        
+        var found: [String] = []
+        let lower = text.lowercased()
+        
+        for keyword in timelineKeywords {
+            if lower.contains(keyword) {
+                found.append(keyword)
+            }
+        }
+        
+        return found
     }
 
     // MARK: - Full Analysis
@@ -66,12 +150,16 @@ class NaturalLanguageService {
         } else {
             isRelevant = expectedKeywords.contains(where: { loweredText.contains($0.lowercased()) })
         }
+        
+        // Detect sentiment
+        let sentiment = detectSentiment(in: userText)
 
         return LanguageAnalysisResult(
             detectedLanguage: detectedLang,
             isChinese: isChinese,
             tokens: tokens,
-            isRelevantToContext: isRelevant
+            isRelevantToContext: isRelevant,
+            sentiment: sentiment
         )
     }
 }
